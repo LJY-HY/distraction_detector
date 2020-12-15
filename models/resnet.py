@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.autograd import Function
 
 class BasicBlock(nn.Module):
     expansion = 1
@@ -64,6 +65,7 @@ class ResNet(nn.Module):
         self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
         self.linear = nn.Linear(512*block.expansion*4*4, num_classes)
+        self.linear_domain = nn.Linear(512*block.expansion*4*4,2)
 
     def _make_layer(self, block, planes, num_blocks, stride):
         strides = [stride] + [1]*(num_blocks-1)
@@ -73,7 +75,7 @@ class ResNet(nn.Module):
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward(self, x, alpha=0):
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.layer1(out)
         out = self.layer2(out)
@@ -81,8 +83,10 @@ class ResNet(nn.Module):
         out = self.layer4(out)
         out = F.avg_pool2d(out, 7)
         out = out.view(out.size(0), -1)
-        out = self.linear(out)
-        return out
+        reverse_feature = ReverseLayerF.apply(out,alpha)
+        class_out = self.linear(out)
+        domain_out = self.linear_domain(reverse_feature)
+        return class_out, domain_out
 
 def ResNet18(num_classes=10):
     return ResNet(BasicBlock, [2,2,2,2], num_classes)
@@ -98,3 +102,17 @@ def ResNet101(num_classes=10):
 
 def ResNet152(num_classes=10):
     return ResNet(Bottleneck, [3,8,36,3], num_classes)
+
+class ReverseLayerF(Function):
+
+    @staticmethod
+    def forward(ctx, x, alpha):
+        ctx.alpha = alpha
+
+        return x.view_as(x)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        output = grad_output.neg() * ctx.alpha
+
+        return output, None
